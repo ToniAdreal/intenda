@@ -241,6 +241,53 @@ def run_automation(automation_id: str, request: Request, db: DbSession = Depends
     db.commit()
     db.refresh(run)
     audit(db, user, "automation.run", "automation", a.id, request=request, meta={"status": run.status})
+    # Agent action audit trail: one entry per state-changing action the
+    # automation executed, plus a skipped entry for flagged mail the
+    # injection guard excluded from the run.
+    from .. import audit_trail
+
+    trail_common = dict(
+        actor="agent",
+        approval_type="none",
+        approval_summary=f"Automation '{a.name}' runs under your automation settings.",
+        environment="demo",
+    )
+    if skipped_flagged:
+        flagged_msgs = [x for x in matched_all if x.injection_suspect]
+        audit_trail.record(
+            db, user, action_type="automation_run",
+            description=(
+                f"Automation '{a.name}' skipped {skipped_flagged} message(s) flagged "
+                "as a possible prompt injection."
+            ),
+            outcome="skipped", reason="injection_suspect",
+            message_ids=[x.id for x in flagged_msgs],
+            detail={"automation_id": a.id, "run_id": run.id},
+            **trail_common,
+        )
+    for res in results:
+        if res.get("todo_id"):
+            audit_trail.record(
+                db, user, action_type="create_todo",
+                description=f"Automation '{a.name}' created a to-do from \"{matched[0].subject}\".",
+                outcome="executed",
+                message_ids=[matched[0].id],
+                detail={"automation_id": a.id, "run_id": run.id, "todo_id": res["todo_id"]},
+                **trail_common,
+            )
+        elif res.get("review_id"):
+            audit_trail.record(
+                db, user, action_type="prepare_draft",
+                description=(
+                    f"Automation '{a.name}' prepared a reply draft for \"{matched[0].subject}\". "
+                    "It will not be sent without your Review Queue approval."
+                ),
+                outcome="executed",
+                thread_ids=[matched[0].thread_id], message_ids=[matched[0].id],
+                detail={"automation_id": a.id, "run_id": run.id,
+                        "draft_id": res.get("draft_id"), "review_id": res["review_id"]},
+                **trail_common,
+            )
     db.commit()
     return ok(request, {"run": ser.automation_run(run)}, status=201)
 

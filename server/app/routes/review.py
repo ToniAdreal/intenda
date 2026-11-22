@@ -137,6 +137,25 @@ def approve_review(review_id: str, body: ApproveBody, request: Request, db: DbSe
     tasks_svc.after_review_resolved(db, item, approved=True)
     audit(db, user, "review.approved_sent", "review_item", item.id, request=request,
           environment=item.environment, meta={"simulated": result["simulated"]})
+    # Agent action audit trail: this send was based on the draft's source
+    # thread and approved by the user in the Review Queue.
+    from .. import audit_trail
+
+    recipients = ", ".join(
+        (r.get("name") or r.get("email") or "") if isinstance(r, dict) else str(r)
+        for r in (draft.to_recipients or [])
+    ) or "(no recipients)"
+    audit_trail.record(
+        db, user, actor="user", action_type="send_review_item",
+        description=f'Sent the email "{draft.subject}" to {recipients}.',
+        outcome="executed",
+        task_id=item.task_id,
+        thread_ids=[draft.thread_id] if draft.thread_id else [],
+        approval_type="review", approval_id=item.id,
+        approval_summary="You approved this draft in the Review Queue (Approve & Send).",
+        detail={"simulated": result["simulated"], "message_id": result.get("message_id")},
+        environment=item.environment,
+    )
     db.commit()
     manager.broadcast_threadsafe(user.id, "review.updated",
                                  {"review_id": item.id, "status": item.status, "revision": item.revision})

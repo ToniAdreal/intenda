@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Archive,
   Check,
+  History,
   Inbox,
   LayoutDashboard,
   ListTodo,
@@ -21,6 +22,7 @@ const NAV: { path: string; label: string; icon: typeof Inbox; badge?: 'review' |
   { path: '/tasks', label: 'Task Progress', icon: ListTodo, badge: 'tasks' },
   { path: '/inbox', label: 'Inbox', icon: Inbox, badge: 'inbox_unread' },
   { path: '/review', label: 'Review Queue', icon: Check, badge: 'review' },
+  { path: '/activity', label: 'Activity', icon: History },
   { path: '/automations', label: 'Automations', icon: Workflow },
   { path: '/archive', label: 'Archive', icon: Archive },
   { path: '/settings', label: 'Settings', icon: Settings },

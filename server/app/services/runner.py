@@ -14,6 +14,7 @@ from datetime import timezone
 
 from ..config import settings
 from ..db import SessionLocal
+from .. import audit_trail
 from .. import confirmations
 from .. import models as m
 from ..errors import ApiError
@@ -289,6 +290,40 @@ def _execute_step(db, task: m.Task, step: m.TaskStep, user: m.User) -> dict:
     return {"note": "Step completed."}
 
 
+# Step types whose execution changes state and therefore leaves an audit
+# trail entry (app/audit_trail.py). Read-only steps (read_context,
+# summarize, custom_internal) are deliberately absent. The write step
+# types in confirmations.WRITE_STEP_TYPES normally park on the
+# confirmation protocol — whose executions are audited there — and only
+# reach _execute_step through the legacy no-target fallback.
+_AUDITED_STEP_TYPES = {"draft_email", "create_todo", "archive_email", "label_message"}
+
+
+def _record_step_audit(db, task: m.Task, step: m.TaskStep, user: m.User,
+                       output: dict | None, outcome: str = "executed",
+                       reason: str | None = None) -> None:
+    """Audit one mutating step execution, linking the Decision that
+    gated it when there was one."""
+    approval_type, approval_id, approval_summary = "none", None, None
+    decision = db.get(m.Decision, step.approval_id) if step.approval_id else None
+    if decision is not None and decision.status == "approved":
+        approval_type, approval_id = "decision", decision.id
+        approval_summary = f"You approved this step through a {decision.decision_type} decision."
+    elif outcome == "executed":
+        approval_summary = f"Ran under the task's '{task.authorization_mode}' authorization mode."
+    verb = "executed" if outcome == "executed" else "failed"
+    audit_trail.record(
+        db, user, actor="agent", action_type=step.step_type,
+        description=f"Task {task.display_id} step {verb}: {step.title}",
+        outcome=outcome, reason=reason,
+        task_id=task.id, step_id=step.id,
+        thread_ids=list((task.context_scope or {}).get("thread_ids") or []),
+        approval_type=approval_type, approval_id=approval_id,
+        approval_summary=approval_summary,
+        detail=output or {}, environment=task.environment,
+    )
+
+
 async def _confirmation_gate(db, task: m.Task, step: m.TaskStep, user: m.User) -> bool:
     """Two-phase confirmation gate for mutating steps (app/confirmations).
 
@@ -332,6 +367,22 @@ async def _confirmation_gate(db, task: m.Task, step: m.TaskStep, user: m.User) -
                 "skipped_injection_suspect": True,
                 "note": "Skipped: every target is flagged as a possible prompt injection.",
             }
+            # The audit trail shows what the guard stopped, not just
+            # what ran (app/audit_trail.py).
+            audit_trail.record(
+                db, user, actor="agent", action_type=step.step_type,
+                description=(
+                    f"Task {task.display_id} step not executed: {step.title}. "
+                    "Every target is flagged as a possible prompt injection."
+                ),
+                outcome="skipped", reason="injection_suspect",
+                task_id=task.id, step_id=step.id,
+                thread_ids=list((task.context_scope or {}).get("thread_ids") or []),
+                approval_type="none",
+                approval_summary="Stopped by the prompt-injection guard before a confirmation was prepared.",
+                detail={"skipped_injection_suspect": True},
+                environment=task.environment,
+            )
             db.commit()
             await tasks_svc.emit_task_event_async(db, task, "task.step.completed",
                                                   {"step_id": step.id, "output_refs": step.output_refs})
@@ -496,6 +547,8 @@ async def _process_task(db, task: m.Task) -> None:
         nxt.status = "completed"
         nxt.completed_at = m.now()
         nxt.progress_percent = 100
+        if nxt.step_type in _AUDITED_STEP_TYPES:
+            _record_step_audit(db, task, nxt, user, output)
         db.commit()
         await tasks_svc.emit_task_event_async(db, task, "task.step.completed",
                                               {"step_id": nxt.id, "output_refs": output})
@@ -520,6 +573,8 @@ async def _process_task(db, task: m.Task) -> None:
         nxt.error_code = "STEP_FAILED"
         task.status = "failed"
         task.error_code = "STEP_FAILED"
+        if nxt.step_type in _AUDITED_STEP_TYPES:
+            _record_step_audit(db, task, nxt, user, None, outcome="failed", reason="STEP_FAILED")
         db.commit()
         await tasks_svc.emit_task_event_async(db, task, "task.step.failed", {
             "step_id": nxt.id, "error_code": "STEP_FAILED",

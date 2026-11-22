@@ -27,6 +27,7 @@ from datetime import timedelta
 
 from sqlalchemy.orm import Session as DbSession
 
+from . import audit_trail
 from . import injection_guard
 from . import models as m
 from .config import settings
@@ -402,6 +403,108 @@ _EXECUTORS = {
 
 
 # ---------------------------------------------------------------------------
+# Audit trail (app/audit_trail.py): every execution leaves a record
+# ---------------------------------------------------------------------------
+
+
+def _flagged_targets(
+    db: DbSession, user: m.User, action_type: str, payload: dict
+) -> tuple[list[str], list[str]]:
+    """Payload targets that are injection-flagged right now. The
+    executors skip exactly these, so the audit trail can name them."""
+    threads: list[str] = []
+    messages: list[str] = []
+    if action_type in {"archive_threads", "trash_threads"}:
+        for tid in payload.get("thread_ids") or []:
+            thread = db.get(m.EmailThread, tid)
+            if thread is None or thread.user_id != user.id:
+                continue
+            injection_guard.ensure_thread_scanned(db, thread.id)
+            if thread.injection_suspect:
+                threads.append(tid)
+    elif action_type == "label_messages":
+        for mid in payload.get("message_ids") or []:
+            msg = db.get(m.EmailMessage, mid)
+            if msg is None or msg.user_id != user.id:
+                continue
+            injection_guard.ensure_scanned(db, msg)
+            if msg.injection_suspect:
+                messages.append(mid)
+    return threads, messages
+
+
+def _record_execution_audit(
+    db: DbSession,
+    user: m.User,
+    action: m.PendingAction,
+    result: dict,
+    flagged_threads: list[str],
+    flagged_messages: list[str],
+) -> None:
+    """Write the audit entries for one confirmed execution: an
+    ``executed`` entry for what ran, and — when the injection guard
+    stopped part (or all) of the payload — a ``skipped`` entry naming
+    the flagged targets it protected."""
+    payload = action.payload or {}
+    common = dict(
+        actor="agent",
+        action_type=action.action_type,
+        task_id=action.task_id,
+        step_id=action.step_id,
+        approval_type="confirmation",
+        approval_id=action.id,
+        approval_summary="You confirmed this action with its one-time confirmation token.",
+    )
+    if action.action_type in {"archive_threads", "trash_threads"}:
+        done_ids = list(result.get("thread_ids") or [])
+        executed = len(done_ids)
+        basis = audit_trail.thread_basis(db, done_ids)
+        entry_threads, entry_messages = done_ids, []
+    elif action.action_type == "label_messages":
+        done_ids = list(result.get("message_ids") or [])
+        executed = len(done_ids)
+        basis = audit_trail.message_basis(db, done_ids)
+        entry_threads, entry_messages = [], done_ids
+    elif action.action_type == "send_review_item":
+        executed = 1
+        item = db.get(m.ReviewItem, payload.get("review_id") or "")
+        draft = db.get(m.EmailDraft, item.draft_id) if item is not None else None
+        if draft is not None and draft.thread_id:
+            basis = audit_trail.thread_basis(db, [draft.thread_id])
+            entry_threads, entry_messages = [draft.thread_id], []
+        elif draft is not None:
+            basis = [{"kind": "review_item", "id": item.id, "label": draft.subject or "(no subject)"}]
+            entry_threads, entry_messages = [], []
+        else:
+            basis, entry_threads, entry_messages = [], [], []
+    else:  # create_todo has no mail targets
+        executed = 1
+        basis, entry_threads, entry_messages = [], [], []
+
+    skipped = len(flagged_threads) + len(flagged_messages)
+    if executed:
+        audit_trail.record(
+            db, user, description=action.summary, outcome="executed",
+            thread_ids=entry_threads, message_ids=entry_messages, source_basis=basis,
+            detail=result, **common,
+        )
+    if skipped:
+        labels = [_thread_label(db.get(m.EmailThread, tid)) for tid in flagged_threads]
+        labels += [_message_label(db.get(m.EmailMessage, mid)) for mid in flagged_messages]
+        audit_trail.record(
+            db, user,
+            description=(
+                f"Skipped {skipped} flagged target(s): {_join_labels(labels)}. "
+                "Mail flagged as a possible prompt injection is never acted on "
+                "by the Agent automatically."
+            ),
+            outcome="skipped", reason="injection_suspect",
+            thread_ids=flagged_threads, message_ids=flagged_messages,
+            detail={"skipped_injection_suspect": skipped}, **common,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Phase 2: confirm / cancel
 # ---------------------------------------------------------------------------
 
@@ -439,10 +542,29 @@ def confirm(db: DbSession, user: m.User, action_id: str, token: str | None) -> m
     if not token or not hmac.compare_digest(sha256_hex(token), action.token_hash):
         raise ApiError(403, "CONFIRMATION_TOKEN_INVALID",
                        "The confirmation token does not match this prepared action.")
-    result = _EXECUTORS[action.action_type](db, user, action.payload or {})
+    payload = action.payload or {}
+    flagged_threads, flagged_messages = _flagged_targets(db, user, action.action_type, payload)
+    try:
+        result = _EXECUTORS[action.action_type](db, user, payload)
+    except Exception as exc:
+        # The execution failed: the trail still records the attempt and
+        # why, then the error propagates exactly as before.
+        audit_trail.record(
+            db, user, actor="agent", action_type=action.action_type,
+            description=action.summary, outcome="failed",
+            reason=f"{type(exc).__name__}: {exc}"[:500],
+            task_id=action.task_id, step_id=action.step_id,
+            thread_ids=payload.get("thread_ids") or [],
+            message_ids=payload.get("message_ids") or [],
+            approval_type="confirmation", approval_id=action.id,
+            approval_summary="You confirmed this action with its one-time confirmation token.",
+        )
+        db.commit()
+        raise
     action.status = "executed"
     action.resolved_at = m.now()
     action.result = result
+    _record_execution_audit(db, user, action, result, flagged_threads, flagged_messages)
     db.commit()
     db.refresh(action)
     return action

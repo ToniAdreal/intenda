@@ -350,6 +350,27 @@ export interface PendingAction {
   created_at: string;
 }
 
+export interface AuditEntry {
+  id: string;
+  actor: 'agent' | 'user' | 'system';
+  action_type: string;
+  description: string;
+  task_id: string | null;
+  step_id: string | null;
+  thread_ids: string[];
+  message_ids: string[];
+  subjects: string[];
+  source_basis: { kind: string; id: string; label: string; thread_id?: string }[];
+  approval_type: 'confirmation' | 'decision' | 'review' | 'user' | 'none';
+  approval_id: string | null;
+  approval_summary: string | null;
+  outcome: 'executed' | 'skipped' | 'failed';
+  reason: string | null;
+  detail: Record<string, any>;
+  environment: 'demo' | 'live';
+  created_at: string;
+}
+
 export interface ReviewItem {
   id: string;
   task_id: string | null;

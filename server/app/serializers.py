@@ -270,6 +270,29 @@ def pending_action(a: m.PendingAction) -> dict:
     }
 
 
+def audit_entry(e: m.AuditEntry) -> dict:
+    return {
+        "id": e.id,
+        "actor": e.actor,
+        "action_type": e.action_type,
+        "description": e.description,
+        "task_id": e.task_id,
+        "step_id": e.step_id,
+        "thread_ids": e.thread_ids or [],
+        "message_ids": e.message_ids or [],
+        "subjects": e.subjects or [],
+        "source_basis": e.source_basis or [],
+        "approval_type": e.approval_type,
+        "approval_id": e.approval_id,
+        "approval_summary": e.approval_summary,
+        "outcome": e.outcome,
+        "reason": e.reason,
+        "detail": e.detail or {},
+        "environment": e.environment,
+        "created_at": utc_iso(e.created_at),
+    }
+
+
 def review_item(r: m.ReviewItem, d: m.EmailDraft | None = None) -> dict:
     data = {
         "id": r.id,

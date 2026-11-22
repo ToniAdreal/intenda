@@ -96,6 +96,7 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     from .routes import agent as agent_routes
+    from .routes import audit as audit_routes
     from .routes import auth as auth_routes
     from .routes import automations as automations_routes
     from .routes import briefing as briefing_routes
@@ -114,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_routes.router)
     app.include_router(tasks_routes.router)
     app.include_router(confirmations_routes.router)
+    app.include_router(audit_routes.router)
     app.include_router(review_routes.router)
     app.include_router(automations_routes.router)
     app.include_router(settings_routes.router)

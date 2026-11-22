@@ -14,6 +14,7 @@ import Delegate from './components/Delegate';
 import TaskProgress from './components/TaskProgress';
 import Inbox from './components/Inbox';
 import Review from './components/Review';
+import Activity from './components/Activity';
 import Automations from './components/Automations';
 import Archive from './components/Archive';
 import Settings from './components/Settings';
@@ -175,6 +176,7 @@ function Shell() {
   else if (route.startsWith('/tasks/')) page = <TaskProgress taskId={route.slice('/tasks/'.length)} />;
   else if (route === '/inbox') page = <Inbox />;
   else if (route === '/review') page = <Review />;
+  else if (route === '/activity') page = <Activity />;
   else if (route === '/automations') page = <Automations />;
   else if (route === '/archive') page = <Archive />;
   else if (route === '/settings') page = <Settings />;

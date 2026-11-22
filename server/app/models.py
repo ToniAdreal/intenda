@@ -390,6 +390,45 @@ class PendingAction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class AuditEntry(Base):
+    """Agent action audit trail (app/audit_trail.py).
+
+    One immutable row per action the Agent actually executed — or was
+    stopped from executing: what was done (``action_type`` +
+    ``description``), which mail it was based on (``thread_ids`` /
+    ``message_ids`` / ``subjects`` / ``source_basis``), who approved it
+    (``approval_type`` + ``approval_id``: a PendingAction confirmation, a
+    Decision, a Review Queue approval, the user acting manually, or none
+    for standing-authorization runs), and how it ended (``outcome``:
+    executed | skipped | failed, with ``reason`` for the latter two —
+    notably ``injection_suspect`` when the prompt-injection guard stopped
+    it). Deliberately separate from AuditLog, which records account and
+    session security events without task/thread/approval structure.
+    """
+
+    __tablename__ = "audit_entries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    actor: Mapped[str] = mapped_column(String(16), default="agent")  # agent|user|system
+    action_type: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id"), index=True)
+    step_id: Mapped[str | None] = mapped_column(ForeignKey("task_steps.id"))
+    thread_ids: Mapped[list] = mapped_column(JSON, default=list)
+    message_ids: Mapped[list] = mapped_column(JSON, default=list)
+    subjects: Mapped[list] = mapped_column(JSON, default=list)
+    source_basis: Mapped[list] = mapped_column(JSON, default=list)
+    approval_type: Mapped[str] = mapped_column(String(32), default="none")  # confirmation|decision|review|user|none
+    approval_id: Mapped[str | None] = mapped_column(String(36))
+    approval_summary: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(String(16), default="executed", index=True)  # executed|skipped|failed
+    reason: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    environment: Mapped[str] = mapped_column(String(16), default="demo")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class ReviewItem(Base):
     __tablename__ = "review_items"
 
