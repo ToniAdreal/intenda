@@ -189,6 +189,22 @@ def _normalize(db: DbSession, user: m.User, action_type: str, payload: dict) -> 
             (r.get("name") or r.get("email") or "") if isinstance(r, dict) else str(r)
             for r in (draft.to_recipients or [])
         ) or "(no recipients)"
+        # Agent identity mode: the summary must name the sending
+        # identity in its first sentence — a user must never confirm an
+        # agent send believing it goes out as themselves. The payload
+        # snapshots the identity so confirm can re-validate it.
+        identity = db.get(m.AgentIdentity, draft.identity_id) if draft.identity_id else None
+        if identity is not None:
+            summary = (
+                f"Send as your Agent ({identity.display_name} <{identity.address}>) "
+                f'the email "{draft.subject}" to {recipients}. '
+                "This performs the send for this draft only; it cannot be reused for other messages."
+            )
+            return {
+                "review_id": item.id,
+                "identity_id": identity.id,
+                "identity_address": identity.address,
+            }, summary
         summary = (
             f'Send the email "{draft.subject}" to {recipients}. '
             "This performs the send for this draft only; it cannot be reused for other messages."
@@ -385,6 +401,19 @@ def _execute_send(db: DbSession, user: m.User, payload: dict) -> dict:
     draft = db.get(m.EmailDraft, item.draft_id)
     if draft is None:
         raise ApiError(404, "NOT_FOUND", "Draft not found.")
+    # Agent identity mode: an identity send prepared earlier fails
+    # closed if the identity was paused or disconnected in the
+    # meantime, or no longer owns the draft's account.
+    if payload.get("identity_id"):
+        identity = db.get(m.AgentIdentity, payload["identity_id"])
+        if (
+            identity is None
+            or identity.status != "active"
+            or identity.mail_account_id != draft.mail_account_id
+            or draft.identity_id != identity.id
+        ):
+            raise ApiError(409, "IDENTITY_UNAVAILABLE",
+                           "The Agent identity for this send is no longer active, so the send was not performed. Prepare the action again.")
     result = tasks_svc.perform_send(db, user, draft)
     item.status = "approved"
     item.approved_at = m.now()
@@ -446,6 +475,21 @@ def _record_execution_audit(
     stopped part (or all) of the payload — a ``skipped`` entry naming
     the flagged targets it protected."""
     payload = action.payload or {}
+    # Agent identity mode: sends snapshot the identity in the payload;
+    # thread/message actions inherit it from their targets.
+    identity_id = payload.get("identity_id")
+    if identity_id is None:
+        for tid in payload.get("thread_ids") or []:
+            thread = db.get(m.EmailThread, tid)
+            if thread is not None and thread.agent_identity_id:
+                identity_id = thread.agent_identity_id
+                break
+    if identity_id is None:
+        for mid in payload.get("message_ids") or []:
+            msg = db.get(m.EmailMessage, mid)
+            if msg is not None and msg.identity_id:
+                identity_id = msg.identity_id
+                break
     common = dict(
         actor="agent",
         action_type=action.action_type,
@@ -454,6 +498,7 @@ def _record_execution_audit(
         approval_type="confirmation",
         approval_id=action.id,
         approval_summary="You confirmed this action with its one-time confirmation token.",
+        identity_id=identity_id,
     )
     if action.action_type in {"archive_threads", "trash_threads"}:
         done_ids = list(result.get("thread_ids") or [])
@@ -558,6 +603,7 @@ def confirm(db: DbSession, user: m.User, action_id: str, token: str | None) -> m
             message_ids=payload.get("message_ids") or [],
             approval_type="confirmation", approval_id=action.id,
             approval_summary="You confirmed this action with its one-time confirmation token.",
+            identity_id=payload.get("identity_id"),
         )
         db.commit()
         raise

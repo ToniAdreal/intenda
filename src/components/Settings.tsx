@@ -30,6 +30,16 @@ interface SettingsData {
   notifications: Record<string, boolean>;
   privacy: Record<string, boolean>;
   mailboxes: any[];
+  agent_identity: {
+    id: string;
+    mail_account_id: string | null;
+    kind: string;
+    address: string;
+    display_name: string;
+    disclosure_text: string;
+    status: string;
+    is_default: boolean;
+  } | null;
   about: { app: string; version: string; environment: string };
 }
 
@@ -189,6 +199,7 @@ export default function Settings() {
               <span className="sr-main">
                 <span className="sr-title">
                   {mb.email_address} {mb.environment === 'demo' ? <span className="demo-label">Demo</span> : <span className="live-label">Live</span>}
+                  {mb.role === 'agent' && <span className="demo-label">Agent mailbox</span>}
                 </span>
                 <span className="sr-desc" style={{ display: 'block' }}>
                   {mb.provider} · {mb.status}
@@ -217,6 +228,35 @@ export default function Settings() {
           ))}
           <p className="panel-foot-note">Connecting another live mailbox requires the provider's OAuth screen; it is started from the onboarding flow.</p>
         </section>
+
+        {s.agent_identity && (
+          <section className="panel settings-section">
+            <h2>Agent identity</h2>
+            <p className="desc">
+              Your Agent has its own mailbox and sends as itself — never as you. Mail addressed to
+              the Agent lands in the Agent inbox in the sidebar, and every send from this identity
+              carries the disclosure below.
+            </p>
+            <div className="draft-rows">
+              <div className="draft-row">
+                <span className="draft-row-label">Sends as</span>
+                <span>{s.agent_identity.display_name} &lt;{s.agent_identity.address}&gt;</span>
+              </div>
+              <div className="draft-row">
+                <span className="draft-row-label">Status</span>
+                <span>{s.agent_identity.status}</span>
+              </div>
+              <div className="draft-row">
+                <span className="draft-row-label">Disclosure</span>
+                <span style={{ whiteSpace: 'pre-wrap' }}>{s.agent_identity.disclosure_text}</span>
+              </div>
+            </div>
+            <p className="panel-foot-note">
+              In this demo the identity is seeded and read-only. Disconnecting the Agent mailbox
+              removes the identity with it.
+            </p>
+          </section>
+        )}
 
         <section className="panel settings-section">
           <h2>Agent &amp; authorization</h2>

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import {
   api,
+  type AgentIdentity,
   type Draft,
   type MailMessage,
   type ThreadItem,
@@ -54,6 +55,10 @@ export default function Inbox() {
   const toast = useToast();
   const { openComposer, refreshBadges } = useApp();
   const messageParam = useQueryParam('message');
+  // Agent inbox view: ?account=<agent account id> filters every list to
+  // the Agent's own mailbox (identity mode).
+  const accountParam = useQueryParam('account');
+  const [agentIdentity, setAgentIdentity] = useState<AgentIdentity | null>(null);
   const [folder, setFolder] = useState<Folder>('inbox');
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -67,15 +72,30 @@ export default function Inbox() {
   const reload = () => setReloadKey((k) => k + 1);
 
   useEffect(() => {
+    if (!accountParam) {
+      setAgentIdentity(null);
+      return;
+    }
+    let alive = true;
+    api<{ agent_identity: AgentIdentity | null }>('/api/v1/settings')
+      .then((s) => alive && setAgentIdentity(s.agent_identity))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [accountParam]);
+
+  useEffect(() => {
     let alive = true;
     setLoading(true);
+    const acct = accountParam ? `&account_id=${accountParam}` : '';
     const jobs: Promise<unknown>[] = [
-      api<{ items: ThreadItem[] }>('/api/v1/threads?limit=100').then((d) => alive && setThreads(d.items)),
+      api<{ items: ThreadItem[] }>(`/api/v1/threads?limit=100${acct}`).then((d) => alive && setThreads(d.items)),
       api<{ items: Draft[] }>('/api/v1/drafts').then((d) => alive && setDrafts(d.items)),
     ];
     if (folder !== 'drafts') {
       jobs.push(
-        api<{ items: MailMessage[] }>(`/api/v1/emails?folder=${folder}&limit=100`).then(
+        api<{ items: MailMessage[] }>(`/api/v1/emails?folder=${folder}&limit=100${acct}`).then(
           (d) => alive && setMessages(d.items),
         ),
       );
@@ -86,7 +106,11 @@ export default function Inbox() {
     return () => {
       alive = false;
     };
-  }, [folder, reloadKey]);
+  }, [folder, reloadKey, accountParam]);
+
+  const visibleDrafts = accountParam
+    ? drafts.filter((d) => d.mail_account_id === accountParam)
+    : drafts;
 
   // Deep link from search / briefing: open a specific message.
   useEffect(() => {
@@ -128,10 +152,11 @@ export default function Inbox() {
   const counts = useMemo(
     () => ({
       inbox: threads.filter((t) => !t.is_archived).reduce((n, t) => n + t.unread_count, 0),
-      drafts: drafts.length,
+      drafts: visibleDrafts.length,
       archive: threads.filter((t) => t.is_archived).length,
     }),
-    [threads, drafts],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [threads, visibleDrafts],
   );
 
   const act = async (fn: () => Promise<unknown>, okText: string, clearSelection = false) => {
@@ -174,9 +199,26 @@ export default function Inbox() {
     <div className="view" style={{ maxWidth: 1380 }}>
       <div className="view-head with-pill">
         <div>
-          <span className="kicker">INBOX</span>
-          <h1>Your mailbox</h1>
-          <p className="view-sub">Read, reply, archive — or hand a thread to the Agent with its full context attached.</p>
+          <span className="kicker">{accountParam ? 'AGENT INBOX' : 'INBOX'}</span>
+          <h1>{accountParam ? "Your Agent's mailbox" : 'Your mailbox'}</h1>
+          <p className="view-sub">
+            {accountParam ? (
+              <>
+                Mail addressed to{' '}
+                {agentIdentity ? (
+                  <>
+                    {agentIdentity.display_name} &lt;{agentIdentity.address}&gt;
+                  </>
+                ) : (
+                  'your Agent'
+                )}
+                . The Agent is the first reader here; anything it sends goes out under its own
+                name, with its disclosure attached — never as you.
+              </>
+            ) : (
+              'Read, reply, archive — or hand a thread to the Agent with its full context attached.'
+            )}
+          </p>
         </div>
         <EnvLabel env={detail?.environment ?? messages[0]?.environment ?? 'demo'} />
       </div>
@@ -209,6 +251,12 @@ export default function Inbox() {
           </button>
           <div className="pane-divider" />
           <div className="pane-title">About this mailbox</div>
+          {accountParam && (
+            <span className="tag-row" style={{ cursor: 'default' }}>
+              <span className="tag-dot" style={{ background: 'var(--accent, #2563eb)' }} />
+              Agent mailbox — the Agent reads here first
+            </span>
+          )}
           <span className="tag-row" style={{ cursor: 'default' }}>
             <span className="tag-dot" style={{ background: 'var(--khaki)' }} />
             Demo data — sends are simulated
@@ -222,8 +270,8 @@ export default function Inbox() {
           {loading && <SkeletonRows rows={5} />}
           {!loading && folder === 'drafts' && (
             <div className="mail-list">
-              {drafts.length === 0 && <div className="empty-mini">No drafts. Agent drafts waiting for approval live in the Review Queue.</div>}
-              {drafts.map((d) => (
+              {visibleDrafts.length === 0 && <div className="empty-mini">No drafts. Agent drafts waiting for approval live in the Review Queue.</div>}
+              {visibleDrafts.map((d) => (
                 <button
                   key={d.id}
                   className="mail-row"
@@ -286,6 +334,11 @@ export default function Inbox() {
               <h2 className="read-subject">{detail.subject}</h2>
               <div className="read-pills">
                 <EnvLabel env={detail.environment} />
+                {detail.identity_id && (
+                  <span className="pill pill-accent">
+                    {detail.is_sent ? 'Sent by your Agent' : 'Addressed to your Agent'}
+                  </span>
+                )}
                 {detail.has_attachment && <span className="pill pill-neutral">Has attachments</span>}
                 {detail.is_starred && <span className="pill pill-khaki">Starred</span>}
                 {detail.injection_suspect && (

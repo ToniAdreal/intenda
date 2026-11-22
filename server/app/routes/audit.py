@@ -22,7 +22,8 @@ router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 @router.get("")
 def list_audit(request: Request, task_id: str | None = None, thread_id: str | None = None,
                action_type: str | None = None, outcome: str | None = None,
-               actor: str | None = None, limit: int = 50, cursor: str | None = None,
+               actor: str | None = None, identity_id: str | None = None,
+               limit: int = 50, cursor: str | None = None,
                db: DbSession = Depends(get_db), user: m.User = Depends(get_current_user)):
     q = db.query(m.AuditEntry).filter(m.AuditEntry.user_id == user.id)
     if task_id:
@@ -33,7 +34,25 @@ def list_audit(request: Request, task_id: str | None = None, thread_id: str | No
         q = q.filter(m.AuditEntry.outcome == outcome)
     if actor:
         q = q.filter(m.AuditEntry.actor == actor)
+    if identity_id:
+        q = q.filter(m.AuditEntry.identity_id == identity_id)
     q = q.order_by(m.AuditEntry.created_at.desc())
+
+    def render(rows):
+        # Denormalize the identity address at read time so the Activity
+        # page can show which correspondent identity acted.
+        out = []
+        for e in rows:
+            data = ser.audit_entry(e)
+            data["identity_address"] = None
+            if e.identity_id:
+                identity = db.get(m.AgentIdentity, e.identity_id)
+                data["identity_address"] = (
+                    identity.address if identity is not None else "(deleted identity)"
+                )
+            out.append(data)
+        return out
+
     if thread_id:
         # thread_ids is a JSON list column; membership filtering happens
         # in Python over the (bounded, newest-first) candidate set, with
@@ -44,8 +63,8 @@ def list_audit(request: Request, task_id: str | None = None, thread_id: str | No
         total = len(rows)
         items = rows[offset:offset + limit]
         next_cursor = encode_cursor(offset + limit) if offset + limit < total else None
-        return ok(request, {"items": [ser.audit_entry(e) for e in items],
+        return ok(request, {"items": render(items),
                             "next_cursor": next_cursor, "total": total})
     items, next_cursor, total = paginate(q, limit, cursor)
-    return ok(request, {"items": [ser.audit_entry(e) for e in items],
+    return ok(request, {"items": render(items),
                         "next_cursor": next_cursor, "total": total})

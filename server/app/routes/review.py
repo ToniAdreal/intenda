@@ -39,8 +39,18 @@ def list_review(request: Request, status: str | None = None, limit: int = 50, cu
         data = ser.review_item(item, draft)
         data["task_display_id"] = task.display_id if task else None
         data["authorization_mode"] = task.authorization_mode if task else None
+        data["sending_identity"] = _sending_identity(db, draft)
         out.append(data)
     return ok(request, {"items": out, "next_cursor": next_cursor, "total": total})
+
+
+def _sending_identity(db: DbSession, draft: m.EmailDraft | None) -> dict | None:
+    """The Agent identity a draft will send as, if it carries one."""
+    from .. import agent_identity
+
+    if draft is None or not draft.identity_id:
+        return None
+    return agent_identity.identity_brief(db.get(m.AgentIdentity, draft.identity_id))
 
 
 @router.get("/{review_id}")
@@ -56,6 +66,7 @@ def get_review(review_id: str, request: Request, db: DbSession = Depends(get_db)
     data = ser.review_item(item, draft)
     data["task_display_id"] = task.display_id if task else None
     data["authorization_mode"] = task.authorization_mode if task else None
+    data["sending_identity"] = _sending_identity(db, draft)
     return ok(request, {
         "review_item": data,
         "draft": ser.draft(draft) if draft else None,
@@ -153,6 +164,7 @@ def approve_review(review_id: str, body: ApproveBody, request: Request, db: DbSe
         thread_ids=[draft.thread_id] if draft.thread_id else [],
         approval_type="review", approval_id=item.id,
         approval_summary="You approved this draft in the Review Queue (Approve & Send).",
+        identity_id=draft.identity_id,
         detail={"simulated": result["simulated"], "message_id": result.get("message_id")},
         environment=item.environment,
     )

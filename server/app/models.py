@@ -101,11 +101,49 @@ class MailAccount(Base):
     refresh_token_ciphertext: Mapped[str | None] = mapped_column(Text)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provider_account_id: Mapped[str | None] = mapped_column(String(128))
+    # Agent identity mode (app/agent_identity.py): 'personal' mailboxes
+    # belong to the user; an 'agent' mailbox *is* the Agent's own
+    # correspondent identity (see AgentIdentity). agent_identities stays
+    # the source of truth for identity profile data; role is the cheap
+    # predicate inbox/sync queries filter on.
+    role: Mapped[str] = mapped_column(String(16), default="personal")
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sync_cursor: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentIdentity(Base):
+    """The Agent's own correspondent identity (app/agent_identity.py).
+
+    An identity is how the Agent appears to third parties: its own
+    address, its own display name ("Intenda Agent for {user}"), and the
+    standing disclosure block appended to every agent-identity send.
+    ``kind='dedicated_account'`` binds the identity to a MailAccount
+    that *is* the Agent's mailbox; the alias/hosted kinds exist for
+    later phases. actor on audit entries stays 'agent' — the identity
+    records *which correspondent* the Agent acted as.
+    """
+
+    __tablename__ = "agent_identities"
+    __table_args__ = (
+        UniqueConstraint("user_id", "address", name="uq_agent_identity_user_address"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    mail_account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("mail_accounts.id"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(24), default="dedicated_account")
+    address: Mapped[str] = mapped_column(String(320), nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    disclosure_text: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active|paused
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
 class EmailThread(Base):
@@ -125,6 +163,14 @@ class EmailThread(Base):
     # Rolled up from the messages by app.injection_guard: True when any
     # message in the thread was flagged as a possible prompt injection.
     injection_suspect: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Agent identity mode: the identity this thread belongs to (set at
+    # ingest from the account role) and who is handling it. handling_mode
+    # 'agent' means the Agent is the correspondent of record for the
+    # thread; 'user' is today's act-as-user behaviour.
+    agent_identity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_identities.id"), index=True
+    )
+    handling_mode: Mapped[str] = mapped_column(String(16), default="user")
     environment: Mapped[str] = mapped_column(String(16), default="demo")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
@@ -162,6 +208,11 @@ class EmailMessage(Base):
     # (empty when clean); injection_suspect mirrors bool(flags).
     injection_suspect: Mapped[bool] = mapped_column(Boolean, default=False)
     injection_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Agent identity mode: the identity this message was addressed to
+    # (received mail) or sent by (sent mail). NULL = personal mail.
+    identity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_identities.id"), index=True
+    )
     environment: Mapped[str] = mapped_column(String(16), default="demo")
     provider_payload_ref: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -221,6 +272,13 @@ class EmailDraft(Base):
     subject: Mapped[str] = mapped_column(Text, default="")
     body_text: Mapped[str] = mapped_column(Text, default="")
     body_html: Mapped[str | None] = mapped_column(Text)
+    # Agent identity mode: the draft is where sending identity is
+    # decided. A draft with an identity sends as the Agent (from the
+    # identity's account, with the disclosure block already appended to
+    # body_text at creation); without one it sends as the user.
+    identity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_identities.id"), index=True
+    )
     revision: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String(32), default="draft")
     environment: Mapped[str] = mapped_column(String(16), default="demo")
@@ -422,6 +480,12 @@ class AuditEntry(Base):
     approval_type: Mapped[str] = mapped_column(String(32), default="none")  # confirmation|decision|review|user|none
     approval_id: Mapped[str | None] = mapped_column(String(36))
     approval_summary: Mapped[str | None] = mapped_column(Text)
+    # Agent identity mode: which correspondent identity the actor acted
+    # as. actor stays in {agent, user, system}; NULL = the user
+    # personally (act-as-user mode).
+    identity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_identities.id"), index=True
+    )
     outcome: Mapped[str] = mapped_column(String(16), default="executed", index=True)  # executed|skipped|failed
     reason: Mapped[str | None] = mapped_column(Text)
     detail: Mapped[dict] = mapped_column(JSON, default=dict)

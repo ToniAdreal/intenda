@@ -226,6 +226,7 @@ export default function Review() {
                     <span className="queue-title">{item.draft.subject}</span>
                     <span className="queue-meta">
                       To {item.draft.to_recipients.map((r) => r.name ?? r.email).join(', ')} · {timeAgo(item.created_at)}
+                      {item.sending_identity ? ' · sends as your Agent' : ''}
                     </span>
                     <span className="queue-foot">
                       <span className="queue-id">{item.task_display_id ?? 'Manual'}</span>
@@ -257,6 +258,16 @@ export default function Review() {
                 </div>
                 <div className="detail-meta">
                   <div className="draft-rows">
+                    {detail.sending_identity && (
+                      <div className="draft-row">
+                        <span className="draft-row-label">Sending as</span>
+                        <span>
+                          {detail.sending_identity.display_name} &lt;{detail.sending_identity.address}&gt;
+                          {' '}— your Agent, not you. The disclosure block at the end of the draft is
+                          part of what will be sent.
+                        </span>
+                      </div>
+                    )}
                     <div className="draft-row">
                       <span className="draft-row-label">To</span>
                       <span>{detail.draft.to_recipients.map((r) => (r.name ? `${r.name} <${r.email}>` : r.email)).join(', ')}</span>

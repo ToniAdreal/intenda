@@ -31,6 +31,9 @@ def _settings_payload(db: DbSession, user: m.User) -> dict:
         .filter(m.MailAccount.user_id == user.id, m.MailAccount.deleted_at.is_(None))
         .all()
     )
+    from .. import agent_identity
+
+    identity = agent_identity.identity_for_user(db, user.id)
     return {
         "profile": {"name": user.name, "email": user.email, "created_at": ser.utc_iso(user.created_at)},
         "appearance": {"mode": row.appearance},
@@ -45,6 +48,7 @@ def _settings_payload(db: DbSession, user: m.User) -> dict:
         "notifications": row.notification_preferences or {},
         "privacy": row.privacy_preferences or {},
         "mailboxes": [ser.mail_account(a) for a in accounts],
+        "agent_identity": ser.agent_identity(identity) if identity is not None else None,
         "about": {"app": "Intenda", "version": "1.0.0",
                   "environment": "demo" if any(a.environment == "demo" for a in accounts) else "live"},
     }

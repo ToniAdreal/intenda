@@ -232,15 +232,27 @@ def _execute_step(db, task: m.Task, step: m.TaskStep, user: m.User) -> dict:
                 lines.append(f"{t.subject_normalized}: {(latest.snippet or '')[:160]}")
         return {"summary": " ".join(lines)[:900] or "No messages in the selected context."}
     if step.step_type == "draft_email":
-        account = (
-            db.query(m.MailAccount)
-            .filter(m.MailAccount.user_id == user.id, m.MailAccount.deleted_at.is_(None))
-            .first()
-        )
+        # Identity-aware drafting (app/agent_identity.py): the draft is
+        # created on the account the context thread belongs to — and,
+        # for agent-handled threads, on the Agent's own account with
+        # the identity attached — instead of blindly taking the user's
+        # first account.
+        from .. import agent_identity
+
+        thread_id = threads[0].id if threads else None
+        account = None
+        identity = None
+        if threads:
+            account, identity = agent_identity.resolve_for_thread(db, threads[0])
+        if account is None:
+            account = (
+                db.query(m.MailAccount)
+                .filter(m.MailAccount.user_id == user.id, m.MailAccount.deleted_at.is_(None))
+                .first()
+            )
         to_list = refs.get("to")
         subject = refs.get("subject")
         body = refs.get("body")
-        thread_id = threads[0].id if threads else None
         if not to_list and threads:
             others = [p for p in (threads[0].participants or []) if p.get("email") != account.email_address]
             to_list = others[:1]
@@ -262,6 +274,7 @@ def _execute_step(db, task: m.Task, step: m.TaskStep, user: m.User) -> dict:
             thread_id=thread_id, task=task,
             agent_note=f"Draft prepared by task {task.display_id} from the approved plan. Review, edit or reject it here; nothing is sent before your approval.",
             source_refs={"thread_id": thread_id, "task_display_id": task.display_id},
+            identity=identity,
         )
         return {"draft_id": draft.id, "review_id": item.id}
     if step.step_type == "create_todo":
@@ -312,6 +325,19 @@ def _record_step_audit(db, task: m.Task, step: m.TaskStep, user: m.User,
     elif outcome == "executed":
         approval_summary = f"Ran under the task's '{task.authorization_mode}' authorization mode."
     verb = "executed" if outcome == "executed" else "failed"
+    # Agent identity mode: a draft step's identity rides on the draft it
+    # created; other steps inherit the context threads' identity.
+    identity_id = None
+    if output and output.get("draft_id"):
+        draft = db.get(m.EmailDraft, output["draft_id"])
+        if draft is not None:
+            identity_id = draft.identity_id
+    if identity_id is None:
+        for tid in (task.context_scope or {}).get("thread_ids") or []:
+            thread = db.get(m.EmailThread, tid)
+            if thread is not None and thread.agent_identity_id:
+                identity_id = thread.agent_identity_id
+                break
     audit_trail.record(
         db, user, actor="agent", action_type=step.step_type,
         description=f"Task {task.display_id} step {verb}: {step.title}",
@@ -320,6 +346,7 @@ def _record_step_audit(db, task: m.Task, step: m.TaskStep, user: m.User,
         thread_ids=list((task.context_scope or {}).get("thread_ids") or []),
         approval_type=approval_type, approval_id=approval_id,
         approval_summary=approval_summary,
+        identity_id=identity_id,
         detail=output or {}, environment=task.environment,
     )
 

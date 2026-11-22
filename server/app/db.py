@@ -37,6 +37,11 @@ def init_db() -> None:
     from .injection_guard import ensure_columns
 
     ensure_columns(engine)
+    # Same backstop for the Agent identity mode columns (the
+    # agent_identities table itself is created by create_all above).
+    from .agent_identity import ensure_columns as ensure_identity_columns
+
+    ensure_identity_columns(engine)
 
 
 def get_db():

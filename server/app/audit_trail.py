@@ -25,6 +25,10 @@ Recording points (the real execution points, never read-only browsing):
 ``record`` only adds and flushes: the row rides the caller's transaction
 and is persisted by the caller's commit, so an action and its audit
 record can never drift apart.
+
+Agent identity mode (app/agent_identity.py): entries for actions taken
+as the Agent carry ``identity_id`` — which correspondent identity acted
+— while ``actor`` stays in {agent, user, system}.
 """
 from __future__ import annotations
 
@@ -81,6 +85,7 @@ def record(
     approval_type: str = "none",
     approval_id: str | None = None,
     approval_summary: str | None = None,
+    identity_id: str | None = None,
     reason: str | None = None,
     detail: dict | None = None,
     environment: str = "demo",
@@ -114,6 +119,7 @@ def record(
         approval_type=approval_type,
         approval_id=approval_id,
         approval_summary=approval_summary,
+        identity_id=identity_id,
         outcome=outcome,
         reason=reason,
         detail=detail or {},

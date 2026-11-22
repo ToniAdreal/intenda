@@ -204,9 +204,23 @@ export interface MailAccount {
   display_name: string | null;
   environment: 'demo' | 'live';
   status: string;
+  role: 'personal' | 'agent';
   scopes: string[];
   last_sync_at: string | null;
   created_at: string;
+}
+
+/** The Agent's own correspondent identity (step 3). A draft or message
+ * carrying an identity is the Agent acting as itself, not as the user. */
+export interface AgentIdentity {
+  id: string;
+  mail_account_id: string | null;
+  kind: string;
+  address: string;
+  display_name: string;
+  disclosure_text?: string;
+  status: string;
+  is_default?: boolean;
 }
 
 export interface Person {
@@ -240,6 +254,7 @@ export interface MailMessage {
   has_attachment: boolean;
   injection_suspect?: boolean;
   injection_flags?: InjectionFlag[];
+  identity_id?: string | null;
   environment: 'demo' | 'live';
   created_at: string;
   attachments?: Attachment[];
@@ -264,6 +279,8 @@ export interface ThreadItem {
   is_archived: boolean;
   is_trashed: boolean;
   injection_suspect?: boolean;
+  agent_identity_id?: string | null;
+  handling_mode?: string;
   environment: 'demo' | 'live';
   latest_message?: MailMessage;
 }
@@ -278,6 +295,7 @@ export interface Draft {
   cc_recipients: Person[];
   subject: string;
   body_text: string;
+  identity_id?: string | null;
   status: string;
   revision: number;
   environment: 'demo' | 'live';
@@ -364,6 +382,8 @@ export interface AuditEntry {
   approval_type: 'confirmation' | 'decision' | 'review' | 'user' | 'none';
   approval_id: string | null;
   approval_summary: string | null;
+  identity_id?: string | null;
+  identity_address?: string | null;
   outcome: 'executed' | 'skipped' | 'failed';
   reason: string | null;
   detail: Record<string, any>;
@@ -383,6 +403,8 @@ export interface ReviewItem {
   environment: 'demo' | 'live';
   created_at: string;
   draft: Draft;
+  /** Present when the draft sends as the Agent's own identity. */
+  sending_identity?: AgentIdentity | null;
 }
 
 export interface Automation {
@@ -416,6 +438,10 @@ export interface BriefingDecision {
 export interface Briefing {
   environment: 'demo' | 'live' | 'none';
   has_mailbox: boolean;
+  agent_mail?: {
+    identity: AgentIdentity | null;
+    unread: number;
+  } | null;
   metrics: {
     new_mail: number;
     needs_decision: number;

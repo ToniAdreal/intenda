@@ -206,17 +206,23 @@ def run_automation(automation_id: str, request: Request, db: DbSession = Depends
                 results.append({"type": atype, "skipped": "no matching message"})
         elif atype == "prepare_draft":
             if matched and account is not None:
+                from .. import agent_identity
                 from ..services import tasks_svc
 
                 src = matched[0]
+                # Draft on the account the matched mail belongs to; mail
+                # addressed to the Agent drafts as the Agent.
+                src_thread = db.get(m.EmailThread, src.thread_id)
+                draft_account, draft_identity = agent_identity.resolve_for_thread(db, src_thread)
                 draft, item = tasks_svc.create_review_draft(
-                    db, user, account,
+                    db, user, draft_account or account,
                     to_recipients=[{"name": src.from_name or src.from_address, "email": src.from_address}],
                     subject=f"Re: {src.subject}",
                     body="Hi,\n\nThanks for your message. I am reviewing it and will follow up shortly.\n\nBest regards",
                     thread_id=src.thread_id, task=None,
                     agent_note=f"Draft prepared by automation '{a.name}'. It will not be sent without your Review Queue approval.",
                     source_refs={"message_id": src.id, "automation_id": a.id},
+                    identity=draft_identity,
                 )
                 results.append({"type": atype, "draft_id": draft.id, "review_id": item.id})
             else:
@@ -262,6 +268,7 @@ def run_automation(automation_id: str, request: Request, db: DbSession = Depends
             ),
             outcome="skipped", reason="injection_suspect",
             message_ids=[x.id for x in flagged_msgs],
+            identity_id=flagged_msgs[0].identity_id if flagged_msgs else None,
             detail={"automation_id": a.id, "run_id": run.id},
             **trail_common,
         )
@@ -272,6 +279,7 @@ def run_automation(automation_id: str, request: Request, db: DbSession = Depends
                 description=f"Automation '{a.name}' created a to-do from \"{matched[0].subject}\".",
                 outcome="executed",
                 message_ids=[matched[0].id],
+                identity_id=matched[0].identity_id,
                 detail={"automation_id": a.id, "run_id": run.id, "todo_id": res["todo_id"]},
                 **trail_common,
             )
@@ -284,6 +292,7 @@ def run_automation(automation_id: str, request: Request, db: DbSession = Depends
                 ),
                 outcome="executed",
                 thread_ids=[matched[0].thread_id], message_ids=[matched[0].id],
+                identity_id=matched[0].identity_id,
                 detail={"automation_id": a.id, "run_id": run.id,
                         "draft_id": res.get("draft_id"), "review_id": res["review_id"]},
                 **trail_common,

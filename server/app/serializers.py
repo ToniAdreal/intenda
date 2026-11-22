@@ -35,9 +35,24 @@ def mail_account(a: m.MailAccount) -> dict:
         "display_name": a.display_name,
         "environment": a.environment,
         "status": a.status,
+        "role": a.role or "personal",
         "scopes": a.scopes or [],
         "last_sync_at": utc_iso(a.last_sync_at),
         "created_at": utc_iso(a.created_at),
+    }
+
+
+def agent_identity(i: m.AgentIdentity) -> dict:
+    return {
+        "id": i.id,
+        "mail_account_id": i.mail_account_id,
+        "kind": i.kind,
+        "address": i.address,
+        "display_name": i.display_name,
+        "disclosure_text": i.disclosure_text,
+        "status": i.status,
+        "is_default": bool(i.is_default),
+        "created_at": utc_iso(i.created_at),
     }
 
 
@@ -63,6 +78,7 @@ def message(msg: m.EmailMessage, attachments: list | None = None) -> dict:
         "is_trashed": msg.is_trashed,
         "injection_suspect": bool(msg.injection_suspect),
         "injection_flags": msg.injection_flags or [],
+        "identity_id": msg.identity_id,
         "environment": msg.environment,
         "has_attachment": bool(attachments),
         "created_at": utc_iso(msg.created_at),
@@ -103,6 +119,8 @@ def thread(t: m.EmailThread, latest: m.EmailMessage | None = None) -> dict:
         "is_archived": t.is_archived,
         "is_trashed": t.is_trashed,
         "injection_suspect": bool(t.injection_suspect),
+        "agent_identity_id": t.agent_identity_id,
+        "handling_mode": t.handling_mode or "user",
         "environment": t.environment,
     }
     if latest is not None:
@@ -122,6 +140,7 @@ def draft(d: m.EmailDraft) -> dict:
         "bcc_recipients": d.bcc_recipients or [],
         "subject": d.subject,
         "body_text": d.body_text,
+        "identity_id": d.identity_id,
         "revision": d.revision,
         "status": d.status,
         "environment": d.environment,
@@ -285,6 +304,7 @@ def audit_entry(e: m.AuditEntry) -> dict:
         "approval_type": e.approval_type,
         "approval_id": e.approval_id,
         "approval_summary": e.approval_summary,
+        "identity_id": e.identity_id,
         "outcome": e.outcome,
         "reason": e.reason,
         "detail": e.detail or {},

@@ -25,8 +25,15 @@ def briefing(request: Request, date: str | None = None, db: DbSession = Depends(
     environment = "demo" if any(a.environment == "demo" for a in accounts) else (
         "live" if accounts else "none"
     )
+    # Agent identity mode: mail in the Agent's own mailbox is reported
+    # as its own Briefing section, never blended into the user's counts.
+    personal_ids = [a.id for a in accounts if (a.role or "personal") == "personal"]
+    agent_accounts = [a for a in accounts if (a.role or "personal") == "agent"]
 
-    unread = (
+    def personal_only(q):
+        return q.filter(m.EmailMessage.mail_account_id.in_(personal_ids)) if personal_ids else q
+
+    unread = personal_only(
         db.query(m.EmailMessage)
         .join(m.EmailThread, m.EmailMessage.thread_id == m.EmailThread.id)
         .filter(
@@ -37,8 +44,7 @@ def briefing(request: Request, date: str | None = None, db: DbSession = Depends(
             m.EmailMessage.is_trashed.is_(False),
             m.EmailThread.is_archived.is_(False),
         )
-        .count()
-    )
+    ).count()
     pending_reviews = (
         db.query(m.ReviewItem)
         .filter(m.ReviewItem.user_id == user.id, m.ReviewItem.status.in_(["pending", "modified"]))
@@ -60,11 +66,10 @@ def briefing(request: Request, date: str | None = None, db: DbSession = Depends(
     delivered = (
         db.query(m.Task).filter(m.Task.user_id == user.id, m.Task.status == "completed").count()
     )
-    sent_count = (
+    sent_count = personal_only(
         db.query(m.EmailMessage)
         .filter(m.EmailMessage.user_id == user.id, m.EmailMessage.is_sent.is_(True))
-        .count()
-    )
+    ).count()
 
     decision_cards = []
     for item in pending_reviews:
@@ -98,7 +103,7 @@ def briefing(request: Request, date: str | None = None, db: DbSession = Depends(
             "created_at": ser.utc_iso(dec.created_at),
         })
 
-    recent = (
+    recent = personal_only(
         db.query(m.EmailMessage)
         .filter(
             m.EmailMessage.user_id == user.id,
@@ -106,10 +111,30 @@ def briefing(request: Request, date: str | None = None, db: DbSession = Depends(
             m.EmailMessage.is_sent.is_(False),
             m.EmailMessage.is_trashed.is_(False),
         )
-        .order_by(m.EmailMessage.created_at.desc())
-        .limit(8)
-        .all()
-    )
+    ).order_by(m.EmailMessage.created_at.desc()).limit(8).all()
+
+    agent_mail = None
+    if agent_accounts:
+        from .. import agent_identity
+
+        agent_ids = [a.id for a in agent_accounts]
+        agent_unread = (
+            db.query(m.EmailMessage)
+            .filter(
+                m.EmailMessage.user_id == user.id,
+                m.EmailMessage.mail_account_id.in_(agent_ids),
+                m.EmailMessage.is_read.is_(False),
+                m.EmailMessage.is_draft.is_(False),
+                m.EmailMessage.is_sent.is_(False),
+                m.EmailMessage.is_trashed.is_(False),
+            )
+            .count()
+        )
+        identity = agent_identity.identity_for_user(db, user.id)
+        agent_mail = {
+            "identity": agent_identity.identity_brief(identity),
+            "unread": agent_unread,
+        }
     recent_activity = (
         db.query(m.AuditLog)
         .filter(m.AuditLog.user_id == user.id)
@@ -133,6 +158,7 @@ def briefing(request: Request, date: str | None = None, db: DbSession = Depends(
     return ok(request, {
         "environment": environment,
         "has_mailbox": bool(accounts),
+        "agent_mail": agent_mail,
         "metrics": {
             "new_mail": unread,
             "needs_decision": len(pending_reviews) + len(pending_decisions),

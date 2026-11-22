@@ -115,6 +115,7 @@ export default function Activity() {
                     <span className="list-row-meta" style={{ display: 'block' }}>
                       {fmtTime(e.created_at)} · {ACTOR_LABEL[e.actor] ?? e.actor} ·{' '}
                       {ACTION_LABEL[e.action_type] ?? e.action_type}
+                      {e.identity_address ? <> · as {e.identity_address} (Agent identity)</> : null}
                     </span>
                     {e.approval_summary && (
                       <span className="list-row-meta" style={{ display: 'block' }}>

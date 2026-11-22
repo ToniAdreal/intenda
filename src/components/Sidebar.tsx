@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Archive,
+  Bot,
   Check,
   History,
   Inbox,
@@ -14,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../lib/appctx';
 import { navigate, useRoute } from '../lib/ui';
-import { api } from '../lib/api';
+import { api, type MailAccount } from '../lib/api';
 
 const NAV: { path: string; label: string; icon: typeof Inbox; badge?: 'review' | 'tasks' | 'inbox_unread' }[] = [
   { path: '/briefing', label: 'Today Briefing', icon: LayoutDashboard },
@@ -117,6 +118,30 @@ function AppearanceControl() {
 export default function Sidebar() {
   const route = useRoute();
   const { badges, agentAvailable, environment } = useApp();
+  // The Agent's own mailbox (identity mode) gets its own nav entry,
+  // filtered to that account. Absent when no identity is connected.
+  const [agentAccount, setAgentAccount] = useState<MailAccount | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api<{ mailboxes: MailAccount[] }>('/api/v1/settings')
+      .then((s) => {
+        if (alive) setAgentAccount(s.mailboxes.find((mb) => mb.role === 'agent') ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const agentInboxActive =
+    route === '/inbox' &&
+    new URLSearchParams(window.location.search).get('account') === agentAccount?.id;
+  const openAgentInbox = () => {
+    if (!agentAccount) return;
+    navigate(`/inbox?account=${agentAccount.id}`);
+    // Inbox reads its `account` query param on popstate; navigate()
+    // pushState does not fire one, so nudge listeners when already there.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  };
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -131,14 +156,19 @@ export default function Sidebar() {
       </button>
       <nav className="nav" aria-label="Primary">
         {NAV.map((item) => {
-          const active = route === item.path || route.startsWith(item.path + '/');
+          const active =
+            (route === item.path || route.startsWith(item.path + '/')) &&
+            !(item.path === '/inbox' && agentInboxActive);
           const badge = item.badge ? badges[item.badge] : 0;
           return (
             <button
               key={item.path}
               className={`nav-item${active ? ' active' : ''}`}
               aria-current={active ? 'page' : undefined}
-              onClick={() => navigate(item.path)}
+              onClick={() => {
+                navigate(item.path);
+                window.dispatchEvent(new PopStateEvent('popstate'));
+              }}
             >
               <item.icon size={18} />
               <span className="nav-label">{item.label}</span>
@@ -146,6 +176,16 @@ export default function Sidebar() {
             </button>
           );
         })}
+        {agentAccount && (
+          <button
+            className={`nav-item${agentInboxActive ? ' active' : ''}`}
+            aria-current={agentInboxActive ? 'page' : undefined}
+            onClick={openAgentInbox}
+          >
+            <Bot size={18} />
+            <span className="nav-label">Agent inbox</span>
+          </button>
+        )}
       </nav>
       <div className="sidebar-foot">
         <div className="agent-status">

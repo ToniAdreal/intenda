@@ -163,6 +163,15 @@ export default function Briefing() {
             <div className="stat-sub">Completed tasks</div>
           </div>
         </div>
+        {data.agent_mail?.identity && (
+          <div className="stat-cell">
+            <div className="stat-num">{data.agent_mail.unread}</div>
+            <div>
+              <div className="stat-label">Mail to your Agent</div>
+              <div className="stat-sub">Unread in {data.agent_mail.identity.address}</div>
+            </div>
+          </div>
+        )}
       </section>
 
       <div className="brief-grid">

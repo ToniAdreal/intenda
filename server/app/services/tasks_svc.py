@@ -73,7 +73,16 @@ def create_review_draft(
     task: m.Task | None,
     agent_note: str,
     source_refs: dict | None = None,
+    identity: m.AgentIdentity | None = None,
 ) -> tuple[m.EmailDraft, m.ReviewItem]:
+    # Agent identity mode: the draft is where sending identity is
+    # decided. An identity draft is created on the identity's account
+    # and carries the disclosure block in its body from the start, so
+    # the Review Queue shows exactly what will be sent.
+    if identity is not None:
+        from .. import agent_identity
+
+        body = agent_identity.append_disclosure(body, identity)
     draft = m.EmailDraft(
         user_id=user.id,
         mail_account_id=account.id,
@@ -81,6 +90,7 @@ def create_review_draft(
         to_recipients=to_recipients,
         subject=subject,
         body_text=body,
+        identity_id=identity.id if identity is not None else None,
         status="in_review",
         environment=account.environment,
     )
@@ -122,6 +132,10 @@ def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
     instead of recording a send that never happened."""
     account = db.get(m.MailAccount, draft.mail_account_id)
     environment = draft.environment
+    # Agent identity mode: a draft carrying an identity sends as the
+    # Agent — from the identity's account (perform_send already routes
+    # by the draft's account) and under the identity's display name.
+    identity = db.get(m.AgentIdentity, draft.identity_id) if draft.identity_id else None
     provider_message_id: str | None = None
     if (
         account is not None
@@ -148,6 +162,9 @@ def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
             participants=list(draft.to_recipients or []),
             environment=environment,
         )
+        if identity is not None:
+            thread.agent_identity_id = identity.id
+            thread.handling_mode = "agent"
         db.add(thread)
         db.flush()
         draft.thread_id = thread.id
@@ -157,6 +174,9 @@ def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
         # creating a second row would double-count the Sent folder.
         backing.is_draft = False
         backing.is_sent = True
+        if identity is not None:
+            backing.from_name = identity.display_name
+            backing.identity_id = identity.id
         if provider_message_id:
             backing.provider_message_id = provider_message_id
         backing.sent_at = m.now()
@@ -175,7 +195,8 @@ def perform_send(db: DbSession, user: m.User, draft: m.EmailDraft) -> dict:
             thread_id=thread.id,
             provider_message_id=provider_message_id,
             from_address=account.email_address if account else "you@demo.intenda.example",
-            from_name=user.name,
+            from_name=identity.display_name if identity is not None else user.name,
+            identity_id=identity.id if identity is not None else None,
             to_recipients=draft.to_recipients or [],
             cc_recipients=draft.cc_recipients or [],
             bcc_recipients=draft.bcc_recipients or [],
