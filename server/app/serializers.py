@@ -251,6 +251,25 @@ def decision(d: m.Decision) -> dict:
     }
 
 
+def pending_action(a: m.PendingAction) -> dict:
+    # The confirmation token itself is never serialized: only its hash is
+    # stored, and the raw token is returned once by the prepare call.
+    return {
+        "id": a.id,
+        "task_id": a.task_id,
+        "step_id": a.step_id,
+        "source": a.source,
+        "action_type": a.action_type,
+        "summary": a.summary,
+        "payload": a.payload or {},
+        "status": a.status,
+        "result": a.result,
+        "expires_at": utc_iso(a.expires_at),
+        "resolved_at": utc_iso(a.resolved_at),
+        "created_at": utc_iso(a.created_at),
+    }
+
+
 def review_item(r: m.ReviewItem, d: m.EmailDraft | None = None) -> dict:
     data = {
         "id": r.id,

@@ -361,6 +361,35 @@ class Decision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class PendingAction(Base):
+    """Two-phase confirmation protocol (app/confirmations.py).
+
+    Phase 1 (prepare) stores the exact action payload plus a human-readable
+    summary of what will happen and a one-time confirmation token (only its
+    SHA-256 hash is kept). Nothing mutates at prepare time. Phase 2
+    (confirm) executes the stored payload only when presented with the
+    matching, unexpired token; the token is single-use. Status flow:
+    pending -> executed | cancelled | expired.
+    """
+
+    __tablename__ = "pending_actions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id"), index=True)
+    step_id: Mapped[str | None] = mapped_column(ForeignKey("task_steps.id"))
+    source: Mapped[str] = mapped_column(String(32), default="api")  # api|task_step
+    action_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    result: Mapped[dict | None] = mapped_column(JSON)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class ReviewItem(Base):
     __tablename__ = "review_items"
 

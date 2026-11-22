@@ -68,6 +68,11 @@ class Settings:
     DEMO_SYNC_DELAY_MS: int = int(os.environ.get("DEMO_SYNC_DELAY_MS", "700"))
     AGENT_REQUESTS_PER_MINUTE: int = int(os.environ.get("AGENT_REQUESTS_PER_MINUTE", "10"))
     AGENT_REQUESTS_PER_DAY: int = int(os.environ.get("AGENT_REQUESTS_PER_DAY", "100"))
+    # Two-phase confirmation protocol (app/confirmations.py): a prepared
+    # agent write action must be confirmed with its one-time token before
+    # this many minutes pass, or the token expires and a fresh action has
+    # to be prepared.
+    CONFIRMATION_TTL_MINUTES: int = int(os.environ.get("CONFIRMATION_TTL_MINUTES", "15"))
 
     SESSION_ABSOLUTE_DAYS: int = 7
     SESSION_IDLE_HOURS: int = 24

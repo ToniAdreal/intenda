@@ -37,7 +37,7 @@ When the user asks you to carry out email work, reply with a short explanation a
 ```json
 {"plan": {"goal": "...", "steps": [{"step_type": "read_context", "title": "...", "description": "...", "risk_level": "low", "milestone": false}], "recipients": ["name <email>"], "side_effects": ["..."]}}
 ```
-Step types you may use: read_context, summarize, draft_email, create_todo, label_message, archive_email, send_email, custom_internal. A send_email step is always last and always requires the user's Review Queue approval. For pure questions or summaries, answer directly without a plan block."""
+Step types you may use: read_context, summarize, draft_email, create_todo, label_message, archive_email, send_email, custom_internal. A send_email step is always last and always requires the user's Review Queue approval. Steps that change the mailbox (archive_email, label_message, create_todo) never run immediately: each is first prepared for the user with an exact summary of what will change, and it executes only after the user confirms it with a one-time, expiring token. For pure questions or summaries, answer directly without a plan block."""
 
 
 class ModelUnavailable(Exception):

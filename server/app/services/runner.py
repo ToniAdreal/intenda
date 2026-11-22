@@ -14,7 +14,9 @@ from datetime import timezone
 
 from ..config import settings
 from ..db import SessionLocal
+from .. import confirmations
 from .. import models as m
+from ..errors import ApiError
 from ..helpers import get_onboarding
 from ..ws import manager
 from . import gmail, graphmail, tasks_svc
@@ -287,6 +289,74 @@ def _execute_step(db, task: m.Task, step: m.TaskStep, user: m.User) -> dict:
     return {"note": "Step completed."}
 
 
+async def _confirmation_gate(db, task: m.Task, step: m.TaskStep, user: m.User) -> bool:
+    """Two-phase confirmation gate for mutating steps (app/confirmations).
+
+    Returns True when the step is parked on the protocol (waiting for the
+    user's token confirmation) or was resolved by it, so the caller must
+    not execute the step directly. Returns False only when the step has
+    no resolvable targets and the legacy no-op execution may proceed.
+    The raw token travels in the task.confirmation.required event, which
+    only the task owner's clients can read."""
+    cid = (step.input_refs or {}).get("confirmation_id")
+    if cid:
+        action = db.get(m.PendingAction, cid)
+        if action is not None and action.status == "pending" and not confirmations.is_expired(action):
+            if step.status != "waiting_user":
+                step.status = "waiting_user"
+                task.status = "waiting_user"
+                task.current_step_id = step.id
+                db.commit()
+            return True
+        if action is not None and action.status == "pending":
+            # Expired while parked: supersede it with a fresh action below.
+            action.status = "expired"
+            action.resolved_at = m.now()
+            db.commit()
+        elif action is not None:
+            # Executed/cancelled outcomes are applied synchronously by
+            # the confirm/cancel endpoints; a still-current step means
+            # that already happened, so there is nothing to execute here.
+            return True
+    try:
+        prepared = confirmations.prepare_step_action(db, task, step, user)
+    except ApiError as exc:
+        if exc.code == "INJECTION_SUSPECT":
+            # Every target is flagged as a possible prompt injection:
+            # resolve the step as skipped-for-safety rather than letting
+            # it execute against flagged mail.
+            step.status = "completed"
+            step.completed_at = m.now()
+            step.output_refs = {
+                **(step.output_refs or {}),
+                "skipped_injection_suspect": True,
+                "note": "Skipped: every target is flagged as a possible prompt injection.",
+            }
+            db.commit()
+            await tasks_svc.emit_task_event_async(db, task, "task.step.completed",
+                                                  {"step_id": step.id, "output_refs": step.output_refs})
+            return True
+        raise
+    if prepared is None:
+        return False
+    action, raw_token = prepared
+    step.input_refs = {**(step.input_refs or {}), "confirmation_id": action.id}
+    step.status = "waiting_user"
+    task.status = "waiting_user"
+    task.current_step_id = step.id
+    db.commit()
+    await tasks_svc.emit_task_event_async(db, task, "task.waiting_user",
+                                          {"reason": "Confirmation required", "decision_id": None,
+                                           "confirmation_id": action.id})
+    await tasks_svc.emit_task_event_async(db, task, "task.confirmation.required", {
+        "confirmation_id": action.id, "step_id": step.id,
+        "action_type": action.action_type, "summary": action.summary,
+        "confirmation_token": raw_token,
+        "expires_at": m.as_utc(action.expires_at).isoformat(),
+    })
+    return True
+
+
 async def _process_task(db, task: m.Task) -> None:
     user = db.get(m.User, task.user_id)
     if user is None:
@@ -357,6 +427,13 @@ async def _process_task(db, task: m.Task) -> None:
             ))
             db.commit()
         return
+
+    # Mutating steps never execute directly: they park on the two-phase
+    # confirmation protocol in every authorization mode. (The Decision
+    # gates below still cover read-only steps and mode-A approvals.)
+    if nxt.step_type in confirmations.WRITE_STEP_TYPES:
+        if await _confirmation_gate(db, task, nxt, user):
+            return
 
     if nxt.status == "waiting_user":
         # If the gate decision was approved, release the step and continue.

@@ -332,6 +332,24 @@ export interface Decision {
   created_at: string;
 }
 
+/** Two-phase confirmation protocol: a prepared Agent write action.
+ * Phase 1 (prepare) changes nothing; the action executes only when
+ * confirmed with its one-time token before `expires_at`. */
+export interface PendingAction {
+  id: string;
+  task_id: string | null;
+  step_id: string | null;
+  source: string;
+  action_type: string;
+  summary: string;
+  payload: Record<string, any>;
+  status: 'pending' | 'executed' | 'cancelled' | 'expired';
+  result: Record<string, any> | null;
+  expires_at: string;
+  resolved_at: string | null;
+  created_at: string;
+}
+
 export interface ReviewItem {
   id: string;
   task_id: string | null;

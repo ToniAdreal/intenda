@@ -39,6 +39,15 @@ export default function Review() {
   const [subject, setSubject] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Two-phase send confirmation: phase 1 prepares the send and shows its
+  // summary; the send itself happens only on confirm with the one-time
+  // token, before it expires.
+  const [sendPrep, setSendPrep] = useState<{
+    id: string;
+    token: string;
+    summary: string;
+    expires_at: string;
+  } | null>(null);
 
   const items = data?.items ?? [];
   const selected = items.find((i) => i.id === selectedId) ?? items[0] ?? null;
@@ -56,6 +65,7 @@ export default function Review() {
         setBody(d.review_item.draft.body_text);
         setSubject(d.review_item.draft.subject);
         setNotice(null);
+        setSendPrep(null);
       })
       .catch((e) => toast({ text: errorText(e), error: true }));
     return () => {
@@ -108,6 +118,60 @@ export default function Review() {
         body: { revision, confirm_send: true },
       });
     });
+
+  const prepareSend = () =>
+    run(async () => {
+      if (!detail) return;
+      if (edited) {
+        const r = await api<{ review_item: ReviewItem }>(`/api/v1/review/${detail.id}`, {
+          method: 'PATCH',
+          body: { revision: detail.revision, draft_changes: { subject, body } },
+        });
+        setDetail(r.review_item);
+      }
+      const r = await api<{ confirmation: { id: string; summary: string; expires_at: string }; confirmation_token: string }>(
+        '/api/v1/confirmations',
+        { method: 'POST', body: { action_type: 'send_review_item', payload: { review_id: detail.id } } },
+      );
+      setSendPrep({
+        id: r.confirmation.id,
+        token: r.confirmation_token,
+        summary: r.confirmation.summary,
+        expires_at: r.confirmation.expires_at,
+      });
+    }, 'Send prepared. Review the summary, then confirm with the one-time token.');
+
+  const confirmSend = async () => {
+    if (!sendPrep) return;
+    setBusy(true);
+    try {
+      const r: any = await api(`/api/v1/confirmations/${sendPrep.id}/confirm`, {
+        method: 'POST',
+        body: { token: sendPrep.token },
+      });
+      if (r?.result?.send_result?.notice) setNotice(r.result.send_result.notice);
+      toast({ text: 'Confirmed and sent.' });
+      setSendPrep(null);
+      refreshBadges();
+      reload();
+      if (detail) {
+        const d = await api<{ review_item: ReviewItem }>(`/api/v1/review/${detail.id}`);
+        setDetail(d.review_item);
+      }
+    } catch (e) {
+      toast({ text: errorText(e), error: true });
+      setSendPrep(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelSend = () =>
+    run(async () => {
+      if (!sendPrep) return;
+      await api(`/api/v1/confirmations/${sendPrep.id}/cancel`, { method: 'POST', body: {} });
+      setSendPrep(null);
+    }, 'Send cancelled. Nothing was sent.');
 
   return (
     <div className="view">
@@ -236,6 +300,11 @@ export default function Review() {
                     <button className="btn btn-primary" disabled={busy} onClick={approve}>
                       Approve &amp; send
                     </button>
+                    {!sendPrep && (
+                      <button className="btn btn-dark" disabled={busy} onClick={prepareSend}>
+                        Prepare send confirmation
+                      </button>
+                    )}
                     {edited ? (
                       <button className="btn btn-dark" disabled={busy} onClick={saveEdits}>
                         Save edits
@@ -257,6 +326,23 @@ export default function Review() {
                         <RotateCcw size={14} /> Return to task
                       </button>
                     )}
+                  </div>
+                )}
+                {sendPrep && (detail.status === 'pending' || detail.status === 'modified') && (
+                  <div className="agent-hint" style={{ marginTop: 14 }}>
+                    <Sparkles size={15} />
+                    <span>
+                      <strong>Prepared send:</strong> {sendPrep.summary} Nothing has been sent yet. The
+                      one-time confirmation token expires {new Date(sendPrep.expires_at).toLocaleString()}.
+                      <span className="btn-row" style={{ marginTop: 10 }}>
+                        <button className="btn btn-primary" disabled={busy} onClick={confirmSend}>
+                          Confirm send with token
+                        </button>
+                        <button className="btn btn-ghost" disabled={busy} onClick={cancelSend}>
+                          Cancel
+                        </button>
+                      </span>
+                    </span>
                   </div>
                 )}
                 {detail.status === 'approved' && (

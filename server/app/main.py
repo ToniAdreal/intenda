@@ -99,6 +99,7 @@ def create_app() -> FastAPI:
     from .routes import auth as auth_routes
     from .routes import automations as automations_routes
     from .routes import briefing as briefing_routes
+    from .routes import confirmations as confirmations_routes
     from .routes import mail as mail_routes
     from .routes import onboarding as onboarding_routes
     from .routes import review as review_routes
@@ -112,6 +113,7 @@ def create_app() -> FastAPI:
     app.include_router(briefing_routes.router)
     app.include_router(agent_routes.router)
     app.include_router(tasks_routes.router)
+    app.include_router(confirmations_routes.router)
     app.include_router(review_routes.router)
     app.include_router(automations_routes.router)
     app.include_router(settings_routes.router)

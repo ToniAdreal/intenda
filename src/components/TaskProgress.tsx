@@ -3,6 +3,7 @@ import { AlertTriangle, Check, Clock, Hand, Pause, Play, RotateCcw, X } from 'lu
 import {
   api,
   type Decision,
+  type PendingAction,
   type ReviewItem,
   type TaskItem,
   type TaskStep,
@@ -135,6 +136,10 @@ function TaskDetail({ taskId }: { taskId: string }) {
     () => api<{ items: Decision[] }>(`/api/v1/decisions?task_id=${taskId}`),
     [taskId],
   );
+  const { data: confirmationData, reload: reloadConfirmations } = useAsync(
+    () => api<{ items: PendingAction[] }>(`/api/v1/confirmations?task_id=${taskId}`),
+    [taskId],
+  );
   const [busy, setBusy] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [freeText, setFreeText] = useState<Record<string, string>>({});
@@ -144,10 +149,11 @@ function TaskDetail({ taskId }: { taskId: string }) {
       if (data && ['running', 'waiting_user', 'queued'].includes(data.task.status)) {
         reload();
         reloadDecisions();
+        reloadConfirmations();
       }
     }, 4000);
     return () => window.clearInterval(t);
-  }, [data?.task.status, reload, reloadDecisions]);
+  }, [data?.task.status, reload, reloadDecisions, reloadConfirmations]);
 
   if (loading) {
     return (
@@ -171,7 +177,17 @@ function TaskDetail({ taskId }: { taskId: string }) {
 
   const { task, steps, latest_events, outputs } = data;
   const pending = (decisionData?.items ?? []).filter((d) => d.status === 'pending');
+  const pendingConfirmations = (confirmationData?.items ?? []).filter((a) => a.status === 'pending');
   const pendingOutputs = outputs.filter((o) => o.status === 'pending' || o.status === 'modified');
+
+  // The one-time token for a runner-prepared confirmation travels in the
+  // task.confirmation.required event, readable only by this task's owner.
+  const confirmationToken = (actionId: string): string | null => {
+    const ev = latest_events.find(
+      (e) => e.event_type === 'task.confirmation.required' && e.payload?.confirmation_id === actionId,
+    );
+    return (ev?.payload?.confirmation_token as string) ?? null;
+  };
 
   const call = async (fn: () => Promise<unknown>, okText?: string) => {
     setBusy(true);
@@ -181,6 +197,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
       refreshBadges();
       reload();
       reloadDecisions();
+      reloadConfirmations();
     } catch (e) {
       toast({ text: errorText(e), error: true });
     } finally {
@@ -301,6 +318,56 @@ function TaskDetail({ taskId }: { taskId: string }) {
         </section>
 
         <div className="task-side">
+          {pendingConfirmations.map((a) => {
+            const token = confirmationToken(a.id);
+            return (
+              <section key={a.id} className="panel gate-panel">
+                <span className="pill pill-warn">
+                  <Clock size={12} /> Confirmation needed
+                </span>
+                <h3 className="gate-heading">{a.summary}</h3>
+                <p className="gate-desc">
+                  This change has only been prepared — nothing has happened yet. It runs once, exactly as
+                  described, when you confirm with its one-time token. The token expires{' '}
+                  {fmtDateTime(a.expires_at)}; after that the step must be prepared again.
+                </p>
+                <div className="btn-row">
+                  <button
+                    className="btn btn-primary"
+                    disabled={busy || !token}
+                    onClick={() =>
+                      token &&
+                      call(
+                        () => api(`/api/v1/confirmations/${a.id}/confirm`, { method: 'POST', body: { token } }),
+                        'Confirmed and executed. The task continues.',
+                      )
+                    }
+                  >
+                    Confirm &amp; execute
+                  </button>
+                  <button
+                    className="btn btn-ghost"
+                    disabled={busy}
+                    onClick={() =>
+                      call(
+                        () => api(`/api/v1/confirmations/${a.id}/cancel`, { method: 'POST', body: {} }),
+                        'Cancelled. Nothing was changed, and the task is paused.',
+                      )
+                    }
+                  >
+                    Cancel
+                  </button>
+                </div>
+                {!token && (
+                  <p className="gate-desc" style={{ marginTop: 8 }}>
+                    The confirmation token is on its way with the task event stream — reload in a moment if
+                    this persists.
+                  </p>
+                )}
+              </section>
+            );
+          })}
+
           {pending.map((d) => (
             <section key={d.id} className="panel gate-panel">
               <span className="pill pill-warn">
